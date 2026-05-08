@@ -26,6 +26,7 @@
 
 // ── Init-sequence delays (ms) ────────────────────────────────────────────
 #define INIT_DELAY_STATUS_MS    500
+#define INIT_DELAY_UNLOCK_MS    300
 #define INIT_DELAY_SETTINGS_MS  1000
 #define INIT_DELAY_SPINDLE_MS   500
 
@@ -101,19 +102,29 @@ void initGRBL() {
     // Flush any junk in the RX FIFO before starting
     while (CNC_SERIAL.available()) CNC_SERIAL.read();
 
-    DBG_SERIAL.println("[INIT] Sending status query...");
+    // 1. Query status — GRBL often boots into ALARM state
+    DBG_SERIAL.println("[INIT] Querying status...");
     sendCommand("?");
     drainCNC(INIT_DELAY_STATUS_MS);
 
-    DBG_SERIAL.println("[INIT] Sending settings query...");
+    // 2. Clear alarm lock — mandatory before any G-code will be accepted.
+    //    In ALARM state GRBL silently drops M3/G-code; $X unlocks it to Idle.
+    DBG_SERIAL.println("[INIT] Clearing alarm lock ($X)...");
+    sendCommand("$X");
+    drainCNC(INIT_DELAY_UNLOCK_MS);
+
+    // 3. Dump all settings — informational, response can be ignored
+    DBG_SERIAL.println("[INIT] Reading settings ($$)...");
     sendCommand("$$");
     drainCNC(INIT_DELAY_SETTINGS_MS);
 
+    // 4. Spindle mode: $32=0 — laser fires at constant duty without motion.
+    //    ($32=1 = laser mode, only fires while axis is moving — not what we want)
     DBG_SERIAL.println("[INIT] Setting spindle mode ($32=0)...");
     sendCommand("$32=0");
     drainCNC(INIT_DELAY_SPINDLE_MS);
 
-    DBG_SERIAL.println("[INIT] Init sequence complete.");
+    DBG_SERIAL.println("[INIT] Init complete — machine should be Idle and ready.");
 }
 
 // ─────────────────────────────────────────────────────────────────────────

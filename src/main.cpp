@@ -1,11 +1,21 @@
 #include <Arduino.h>
 
 // ── Serial port assignment ─────────────────────────────────────────────────
-// ARDUINO_USB_CDC_ON_BOOT=1 (set in platformio.ini) remaps Serial to the
-// native USB-OTG port ("USB" USB-C connector).  UART0 stays accessible as
-// Serial0 and is wired through the onboard CP2102 to the "UART" USB-C port.
-#define CNC_SERIAL  Serial0   // UART0 → CP2102 → "UART" USB-C → CNC machine
-#define DBG_SERIAL  Serial    // Native USB CDC  → "USB"  USB-C → PC terminal
+// ESP32-S3-DevKitC-1 physical USB connectors:
+//
+//   Label  │ Chip      │ UART / GPIO              │ Arduino object
+//   ───────┼───────────┼──────────────────────────┼───────────────
+//   "COM"  │ CP2102N   │ UART0  GPIO43(TX)/44(RX) │ Serial0
+//   "USB"  │ Native OTG│ GPIO19(D-) / GPIO20(D+)  │ Serial  ← CDC-on-boot
+//
+// With ARDUINO_USB_CDC_ON_BOOT=1 (platformio.ini):
+//   Serial  → native USB CDC ("USB" connector)  — debug terminal
+//   Serial0 → UART0 hardware  ("COM" connector) — CNC machine
+//
+// ⚠ Serial1 default pins are GPIO17(TX)/GPIO18(RX).
+//   GPIO18 = USB_SEL on this board.  Do NOT use Serial1 at default pins.
+#define CNC_SERIAL  Serial0   // UART0, GPIO43(TX)/GPIO44(RX), "COM" connector
+#define DBG_SERIAL  Serial    // Native USB CDC, GPIO19/20,    "USB" connector
 
 // ── Baud rates ────────────────────────────────────────────────────────────
 #define CNC_BAUD    460800
@@ -175,8 +185,10 @@ void setup() {
     DBG_SERIAL.print("[BOOT] CNC baud: ");
     DBG_SERIAL.println(CNC_BAUD);
 
-    CNC_SERIAL.begin(CNC_BAUD);
-    DBG_SERIAL.println("[BOOT] CNC serial initialized.");
+    // GRBL uses 8 data bits, no parity, 1 stop bit (8N1) — make it explicit
+    CNC_SERIAL.begin(CNC_BAUD, SERIAL_8N1);
+    DBG_SERIAL.println("[BOOT] CNC  → Serial0 (UART0) GPIO43(TX)/GPIO44(RX), 8N1 @ " + String(CNC_BAUD) + " baud  [\"COM\" connector]");
+    DBG_SERIAL.println("[BOOT] DBG  → Serial  (USB CDC) GPIO19/GPIO20              [\"USB\" connector]  ← you are here");
 
     pinMode(FIRE_PIN, INPUT_PULLUP);
     g_firePinLast = digitalRead(FIRE_PIN);

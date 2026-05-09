@@ -25,10 +25,17 @@
 #define FIRE_PIN    4   // INPUT_PULLUP; pull LOW to fire laser
 
 // ── Init-sequence delays (ms) ────────────────────────────────────────────
+#define INIT_DELAY_SOFTRESET_MS 2500   // time for GRBL to reinit after 0x18
 #define INIT_DELAY_STATUS_MS    500
-#define INIT_DELAY_UNLOCK_MS    300
-#define INIT_DELAY_SETTINGS_MS  1000
+#define INIT_DELAY_UNLOCK_MS    500
+#define INIT_DELAY_SETTINGS_MS  1500
 #define INIT_DELAY_SPINDLE_MS   500
+
+// ── Debug CDC wait (ms) ───────────────────────────────────────────────────
+// How long setup() will block waiting for the USB CDC terminal to be opened
+// before proceeding. Lets init log messages appear in the terminal instead
+// of being silently dropped because the port wasn't open yet.
+#define CDC_CONNECT_TIMEOUT_MS  5000
 
 // ── Debounce window (ms) ──────────────────────────────────────────────────
 #define DEBOUNCE_MS  50
@@ -99,15 +106,22 @@ void drainCNC(unsigned long timeout_ms) {
 // Sequence:  ? (status)  →  $$ (dump settings)  →  $32=0 (spindle mode).
 // ─────────────────────────────────────────────────────────────────────────
 void initGRBL() {
-    // Flush any junk in the RX FIFO before starting
+    // 1. Soft reset — clears any garbage the GRBL parser may have received
+    //    from the ESP32 ROM bootloader (which sends noise on UART0 at 115200
+    //    before user code starts). After 0x18, GRBL reinitialises fully.
+    DBG_SERIAL.println("[INIT] Soft reset (0x18) — clearing boot garbage...");
+    CNC_SERIAL.write((uint8_t)0x18);
+    drainCNC(INIT_DELAY_SOFTRESET_MS);  // wait for GRBL to print its banner
+
+    // Flush RX now that GRBL has settled
     while (CNC_SERIAL.available()) CNC_SERIAL.read();
 
-    // 1. Query status — GRBL often boots into ALARM state
+    // 2. Query status — GRBL often boots into ALARM state
     DBG_SERIAL.println("[INIT] Querying status...");
     sendCommand("?");
     drainCNC(INIT_DELAY_STATUS_MS);
 
-    // 2. Clear alarm lock — mandatory before any G-code will be accepted.
+    // 3. Clear alarm lock — mandatory before any G-code will be accepted.
     //    In ALARM state GRBL silently drops M3/G-code; $X unlocks it to Idle.
     DBG_SERIAL.println("[INIT] Clearing alarm lock ($X)...");
     sendCommand("$X");
@@ -191,7 +205,19 @@ void handleDebugInput() {
 // ─────────────────────────────────────────────────────────────────────────
 void setup() {
     DBG_SERIAL.begin(DBG_BAUD);
+
+    // USB CDC (Serial) needs to enumerate and the host terminal needs to open
+    // the COM port before any println() is visible. We block here up to
+    // CDC_CONNECT_TIMEOUT_MS so the init sequence messages are not lost.
+    // If no terminal connects in time the code proceeds anyway (headless).
+    {
+        unsigned long t0 = millis();
+        while (!DBG_SERIAL && (millis() - t0) < CDC_CONNECT_TIMEOUT_MS) {
+            delay(10);
+        }
+    }
     delay(100);
+
     DBG_SERIAL.println("\n[BOOT] GRBL Sender starting...");
     DBG_SERIAL.print("[BOOT] CNC baud: ");
     DBG_SERIAL.println(CNC_BAUD);
@@ -206,9 +232,6 @@ void setup() {
     DBG_SERIAL.print("[BOOT] Fire pin ");
     DBG_SERIAL.print(FIRE_PIN);
     DBG_SERIAL.println(" configured (INPUT_PULLUP).");
-
-    DBG_SERIAL.println("[BOOT] Waiting for CNC controller...");
-    delay(2000);
 
     initGRBL();
 
